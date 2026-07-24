@@ -91,4 +91,45 @@ Skills that need to execute commands should:
 3. Store the wrapper pattern for use throughout the skill
 4. Apply the wrapper to all container commands per Step 2
 
+## Running a Bundled Skill Script Inside the Environment
+
+Some skills ship a helper script (e.g. a PHP script under `scripts/`) that must run
+through a PHP/Node interpreter. On a hardened host there is no local interpreter, and
+a skill installed at user level (`~/.../skills/...`) is not inside the project, so the
+container can't see it. **Do not** copy the script into the project tree: how files
+reach the container differs across environments (bind mounts, Mutagen, named volumes)
+and some paths are not synced at all (e.g. Warden serves `var/`, `generated/`,
+`pub/static`, `pub/media` from separate volumes, so a host-written file there never
+appears in the container).
+
+Instead, **stream the script into the interpreter over stdin** — this is independent
+of the mount/sync strategy, needs no temp file, and needs no cleanup:
+
+1. Detect the environment (Step 1) and resolve the wrapper (Step 2).
+2. **Containerized env** — pipe the script to `php /dev/stdin` through the wrapper
+   (use the non-TTY `-T` exec so stdin is forwarded). `<skill_path>` is the directory
+   containing the calling skill's SKILL.md:
+
+   ```bash
+   # Warden
+   cat "<skill_path>/scripts/<script>.php" | warden env exec -T php-fpm bash -c "php /dev/stdin [args]"
+
+   # docker-magento
+   cat "<skill_path>/scripts/<script>.php" | bin/clinotty bash -c "php /dev/stdin [args]"
+
+   # DDEV
+   cat "<skill_path>/scripts/<script>.php" | ddev exec bash -c "php /dev/stdin [args]"
+   ```
+
+   The script runs with the container's working directory at the project root, so a
+   script that locates the project via `getcwd()` works unchanged. Capture stdout for
+   the result.
+
+   **Script constraints for this method:** the script must not also read from stdin
+   (stdin carries the script itself), and must not rely on `__FILE__`/`__DIR__` (it
+   is `/dev/stdin`) — locate project files via `getcwd()` instead.
+3. **`local` env**: the host has no interpreter (removed during hardening). Do not
+   attempt to run the script directly — report that a containerized dev environment
+   (or a local interpreter) is required for this step.
+
 <!-- Copyright © Hyvä Themes https://hyva.io. All rights reserved. Licensed under OSL 3.0 -->
